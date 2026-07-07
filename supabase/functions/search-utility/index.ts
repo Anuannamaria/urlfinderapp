@@ -1563,10 +1563,10 @@ function scoreSDWISRecord(record: any, standardizedName: string, originalAgency:
   }
 
   // Active system +20
-  if (String(record.PWS_ACTIVITY_CODE || "").toUpperCase() === "A") score += 20;
+  if (String(record.PWS_ACTIVITY_CODE || record.pws_activity_code || "").toUpperCase() === "A") score += 20;
 
   // Community water system +10
-  if (String(record.PWS_TYPE_CODE || "").toUpperCase() === "CWS") score += 10;
+  if (String(record.PWS_TYPE_CODE || record.pws_type_code || "").toUpperCase() === "CWS") score += 10;
 
   return score;
 }
@@ -1674,7 +1674,7 @@ async function lookupPWSIDFromEPA(
     .map(([pwsid, { record, score }]) => ({
       pwsid,
       name: String(record.PWS_NAME || record.pws_name || "").trim(),
-      status: String(record.PWS_ACTIVITY_CODE || "").toUpperCase() === "A" ? "Active" : "Inactive",
+      status: String(record.PWS_ACTIVITY_CODE || record.pws_activity_code || "").toUpperCase() === "A" ? "Active" : "Inactive",
       pws_type: String(record.PWS_TYPE_CODE || record.pws_type_code || "CWS").toUpperCase(),
       county: String(record.COUNTY_SERVED || record.county_served || "").split(",")[0].trim() || resolvedCounty,
       score,
