@@ -335,7 +335,7 @@ async function lookupPWSID(
     if (cleanName) {
       const url1 =
         `https://data.epa.gov/efservice/WATER_SYSTEM/PRIMACY_AGENCY_CODE/${stateAbbr}` +
-        `/PWS_NAME/contains/${encodeURIComponent(cleanName)}/JSON`;
+        `/PWS_NAME/CONTAINING/${encodeURIComponent(cleanName)}/JSON`;
       const resp1 = await fetch(url1, { signal: AbortSignal.timeout(10000) });
       if (resp1.ok) {
         const d = await resp1.json();
@@ -349,7 +349,7 @@ async function lookupPWSID(
       if (firstWord.length > 3) {
         const url2 =
           `https://data.epa.gov/efservice/WATER_SYSTEM/PRIMACY_AGENCY_CODE/${stateAbbr}` +
-          `/PWS_NAME/contains/${encodeURIComponent(firstWord)}/JSON`;
+          `/PWS_NAME/CONTAINING/${encodeURIComponent(firstWord)}/JSON`;
         const resp2 = await fetch(url2, { signal: AbortSignal.timeout(8000) });
         if (resp2.ok) {
           const d2 = await resp2.json();
@@ -363,7 +363,7 @@ async function lookupPWSID(
       const cityQuery = `City of ${geoContext}`;
       const url3 =
         `https://data.epa.gov/efservice/WATER_SYSTEM/PRIMACY_AGENCY_CODE/${stateAbbr}` +
-        `/PWS_NAME/contains/${encodeURIComponent(cityQuery)}/JSON`;
+        `/PWS_NAME/CONTAINING/${encodeURIComponent(cityQuery)}/JSON`;
       const resp3 = await fetch(url3, { signal: AbortSignal.timeout(8000) });
       if (resp3.ok) {
         const d3 = await resp3.json();
@@ -1423,7 +1423,7 @@ async function epaEfserviceFetch(stateAbbr: string, name: string, operator: "exa
   try {
     const path = operator === "exact"
       ? `/PRIMACY_AGENCY_CODE/${stateAbbr}/PWS_NAME/${encodeURIComponent(name)}/JSON`
-      : `/PRIMACY_AGENCY_CODE/${stateAbbr}/PWS_NAME/contains/${encodeURIComponent(name)}/JSON`;
+      : `/PRIMACY_AGENCY_CODE/${stateAbbr}/PWS_NAME/CONTAINING/${encodeURIComponent(name)}/JSON`;
     const resp = await fetch(`https://data.epa.gov/efservice/WATER_SYSTEM${path}`, {
       signal: AbortSignal.timeout(20000),
       headers: { "User-Agent": "Mozilla/5.0 (compatible; WaterUtilitySearch/1.0)" },
