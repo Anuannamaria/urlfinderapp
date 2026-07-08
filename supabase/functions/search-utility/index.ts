@@ -2262,6 +2262,14 @@ async function tier4_ArcGISWithBbox(
     queries.push(`"${standardizedName}" AND "${stateAbbr}" AND (${typeTerms})`);
   }
 
+  // Broader fallback: state + type only, no place-name requirement. A small/obscure place
+  // name (e.g. "Sasakwa") rarely appears in a statewide dataset's title/description, so the
+  // place-name-gated queries above can return zero results even when a genuinely relevant
+  // statewide layer exists (e.g. "Oklahoma Rural Water System Service Areas"). Tried last —
+  // scoring downstream (scoreArcGISCandidate) still ranks candidates by actual PWSID/place
+  // relevance, this just widens the net that reaches scoring.
+  queries.push(`(${typeTerms}) AND "${state}"`);
+
   const seen = new Set<string>();
   const results: Array<{ title: string; owner: string; serviceUrl: string; snippet: string }> = [];
 
