@@ -1546,11 +1546,17 @@ function scoreSDWISRecord(record: any, standardizedName: string, originalAgency:
   // tribal/nation affiliation (e.g. "...of The Seminole Nation of Oklahoma"), the EPA
   // system registered under that nation's name is preferred over a same-state system
   // that merely shares a place-name token (e.g. "Sasakwa").
+  //
+  // The tribal bonus requires the SDWIS name to be a CLEAN match on the tribal name alone
+  // (e.g. "SEMINOLE"), not merely contain it as a substring — otherwise unrelated
+  // county-suffix systems like "SEMINOLE CO. RWD #7" (a Seminole COUNTY rural water
+  // district, not the tribal nation's own system) would earn the same bonus as noise.
   const allTokens = origUpper.split(/\s+/).filter(w => w.length > 3 && !SCORE_STOP.has(w.toLowerCase()));
   const placeTokens = allTokens.filter(w => !TRIBAL_NAMES.has(w.toLowerCase()));
   const tribalTokens = allTokens.filter(w => TRIBAL_NAMES.has(w.toLowerCase()));
 
-  const matchedTribal = tribalTokens.some(tok => pwsName.includes(tok));
+  const pwsNameCore = pwsName.replace(/[^A-Z\s]/g, " ").split(/\s+/).filter(w => w.length > 2 && !SCORE_STOP.has(w.toLowerCase()));
+  const matchedTribal = tribalTokens.some(tok => pwsNameCore.length === 1 && pwsNameCore[0] === tok);
   const matchedPlace = placeTokens.slice(0, 2).some(tok => pwsName.includes(tok));
   if (matchedTribal) {
     score += 35;
@@ -1669,7 +1675,7 @@ async function lookupPWSIDFromEPA(
 
   debug.deduped_count = seen.size;
 
-  const candidates: PWSDCandidate[] = Array.from(seen.entries())
+  const rankedCandidates: PWSDCandidate[] = Array.from(seen.entries())
     .filter(([pwsid, { score }]) => score >= MIN_PWSID_SCORE && okCountyMatches(pwsid, resolvedCounty))
     .map(([pwsid, { record, score }]) => ({
       pwsid,
@@ -1679,7 +1685,16 @@ async function lookupPWSIDFromEPA(
       county: String(record.COUNTY_SERVED || record.county_served || "").split(",")[0].trim() || resolvedCounty,
       score,
     }))
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score);
+
+  // Drop clear stragglers: a wide search net (e.g. the broad tribal-name keyword search)
+  // can pull in tangentially-related records — e.g. "SEMINOLE CO. RWD #7" for an agency
+  // whose real candidates are "SEMINOLE", "SASAKWA RWD", "SASAKWA PWA". Only keep records
+  // within a reasonable gap of the top score, rather than always padding to 5.
+  const CANDIDATE_GAP = 25;
+  const topScore = rankedCandidates[0]?.score ?? 0;
+  const candidates = rankedCandidates
+    .filter(c => c.score >= topScore - CANDIDATE_GAP)
     .slice(0, 5);
 
   debug.candidates_after_filter = candidates.length;
