@@ -2561,34 +2561,11 @@ async function handleArcGISPhase(body: any): Promise<object> {
   });
 
   // ── Tier 1: EPA direct PWSID query (falls back to name search if no PWSID) ──
+  // Note: does NOT short-circuit — even when Tier 1 finds a genuine authoritative match,
+  // Tiers 2-4 still run so users see the full candidate set (Tier 1's allowlist-override
+  // score naturally still wins the ranking, but lower-confidence alternatives remain visible
+  // instead of being hidden).
   const tier1Result = await tier1_EPADirectQuery(confirmed_pwsid ?? "", utility_type, searchName);
-  if (tier1Result) {
-    const regInfo = await regInfoPromise;
-    const boundaryFetch = await fetchBoundary3Outcome(
-      confirmed_pwsid!, agency, county, state, utility_type, regInfo,
-    );
-    const authResults = buildAuthoritativeResults(regInfo);
-    const arcgisResults: SearchResult[] = [{
-      url: tier1Result.serviceUrl,
-      title: tier1Result.title,
-      snippet: tier1Result.snippet,
-      score: 1045,
-      priority_tier: 7,
-      priority_label: "Authoritative Boundary Layer",
-      source_type: "Authoritative Boundary Layer",
-      ai_score: 100,
-      ai_reason: tier1Result.reasons.join("; "),
-    }];
-    return {
-      phase: "arcgis",
-      arcgis_candidates: [tier1Result],
-      winner: tier1Result,
-      no_acceptable_candidate: false,
-      boundary_fetch: boundaryFetch,
-      results: [...authResults, ...arcgisResults],
-      regulatory_info: regInfo,
-    };
-  }
 
   // ── Tier 2: Official website check ────────────────────────────────────────
   const tier2Result = await tier2_OfficialWebsite(searchName, state, stateAbbr, utility_type);
@@ -2620,8 +2597,9 @@ async function handleArcGISPhase(body: any): Promise<object> {
     }),
   )).filter((c): c is ArcGISLayerCandidate => c !== null);
 
-  // Merge tier 2, tier 3, and scored tier 4 candidates
+  // Merge tier 1, tier 2, tier 3, and scored tier 4 candidates
   const allScored: ArcGISLayerCandidate[] = [
+    ...(tier1Result ? [tier1Result] : []),
     ...(tier2Result ? [tier2Result] : []),
     ...(tier3Result ? [tier3Result] : []),
     ...scoredTier4,
