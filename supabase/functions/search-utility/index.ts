@@ -335,7 +335,7 @@ async function lookupPWSID(
     if (cleanName) {
       const url1 =
         `https://data.epa.gov/efservice/WATER_SYSTEM/PRIMACY_AGENCY_CODE/${stateAbbr}` +
-        `/PWS_NAME/contains/${encodeURIComponent(cleanName)}/JSON`;
+        `/PWS_NAME/CONTAINING/${encodeURIComponent(cleanName)}/JSON`;
       const resp1 = await fetch(url1, { signal: AbortSignal.timeout(10000) });
       if (resp1.ok) {
         const d = await resp1.json();
@@ -349,7 +349,7 @@ async function lookupPWSID(
       if (firstWord.length > 3) {
         const url2 =
           `https://data.epa.gov/efservice/WATER_SYSTEM/PRIMACY_AGENCY_CODE/${stateAbbr}` +
-          `/PWS_NAME/contains/${encodeURIComponent(firstWord)}/JSON`;
+          `/PWS_NAME/CONTAINING/${encodeURIComponent(firstWord)}/JSON`;
         const resp2 = await fetch(url2, { signal: AbortSignal.timeout(8000) });
         if (resp2.ok) {
           const d2 = await resp2.json();
@@ -363,7 +363,7 @@ async function lookupPWSID(
       const cityQuery = `City of ${geoContext}`;
       const url3 =
         `https://data.epa.gov/efservice/WATER_SYSTEM/PRIMACY_AGENCY_CODE/${stateAbbr}` +
-        `/PWS_NAME/contains/${encodeURIComponent(cityQuery)}/JSON`;
+        `/PWS_NAME/CONTAINING/${encodeURIComponent(cityQuery)}/JSON`;
       const resp3 = await fetch(url3, { signal: AbortSignal.timeout(8000) });
       if (resp3.ok) {
         const d3 = await resp3.json();
@@ -1423,7 +1423,7 @@ async function epaEfserviceFetch(stateAbbr: string, name: string, operator: "exa
   try {
     const path = operator === "exact"
       ? `/PRIMACY_AGENCY_CODE/${stateAbbr}/PWS_NAME/${encodeURIComponent(name)}/JSON`
-      : `/PRIMACY_AGENCY_CODE/${stateAbbr}/PWS_NAME/contains/${encodeURIComponent(name)}/JSON`;
+      : `/PRIMACY_AGENCY_CODE/${stateAbbr}/PWS_NAME/CONTAINING/${encodeURIComponent(name)}/JSON`;
     const resp = await fetch(`https://data.epa.gov/efservice/WATER_SYSTEM${path}`, {
       signal: AbortSignal.timeout(20000),
       headers: { "User-Agent": "Mozilla/5.0 (compatible; WaterUtilitySearch/1.0)" },
@@ -1467,6 +1467,16 @@ async function epaEchoFetch(keyword: string, stateAbbr: string): Promise<any[]> 
   return [];
 }
 
+// Tribal/nation proper names — these identify WHO governs a system, not WHICH place it's in.
+// A record matching only on the tribal name (e.g. "SEMINOLE") is not evidence it's the right
+// system when the agency name also has a distinct place name (e.g. "SASAKWA"): many unrelated
+// systems within a tribal jurisdiction can legitimately contain the tribe's name.
+const TRIBAL_NAMES = new Set([
+  "seminole","cherokee","choctaw","creek","osage","comanche","navajo","apache","sioux",
+  "ojibwe","potawatomi","pueblo","mohawk","wyandotte","shawnee","miami","kickapoo","ponca",
+  "tonkawa","pawnee","wichita","caddo","delaware","lenape","absentee","citizen",
+]);
+
 // Extract primary keyword, top-3 keywords, and optional tribal keyword from agency name
 function extractSearchKeywords(standardizedName: string, originalAgency: string): {
   primary: string;
@@ -1488,7 +1498,7 @@ function extractSearchKeywords(standardizedName: string, originalAgency: string)
   const top3 = words.slice(0, 3);
 
   const tribalMatch = originalAgency.match(
-    /\b(seminole|cherokee|choctaw|creek|osage|comanche|navajo|apache|sioux|ojibwe|potawatomi|pueblo|mohawk|wyandotte|shawnee|miami|kickapoo|ponca|tonkawa|pawnee|wichita|caddo|delaware|lenape|absentee|citizen)\b/i,
+    new RegExp(`\\b(${[...TRIBAL_NAMES].join("|")})\\b`, "i"),
   );
   const tribal = tribalMatch ? tribalMatch[1].toUpperCase() : undefined;
 
@@ -1531,18 +1541,32 @@ function scoreSDWISRecord(record: any, standardizedName: string, originalAgency:
   const intersection = new Set([...refWords].filter(w => pwsWords.has(w)));
   if (union.size > 0) score += Math.round((intersection.size / union.size) * 40);
 
-  // Place-name token bonus +30: first significant token from originalAgency in SDWIS name
-  // This differentiates e.g. "SASAKWA RWD" from "SEMINOLE" when agency starts with "Sasakwa"
-  const placeTokens = origUpper.split(/\s+/).filter(w => w.length > 3 && !SCORE_STOP.has(w.toLowerCase()));
-  for (const tok of placeTokens.slice(0, 2)) {
-    if (pwsName.includes(tok)) { score += 30; break; }
+  // Place-name token bonus +30: first significant PLACE token (excludes tribal/nation names,
+  // which identify a governing body, not a specific system) from originalAgency in SDWIS name.
+  // This differentiates e.g. "SASAKWA RWD" from "SEMINOLE" when agency is
+  // "Sasakwa Water District of The Seminole Nation" — without excluding "SEMINOLE" here, a
+  // same-state system that merely shares the tribe's name would wrongly earn the same bonus.
+  const allTokens = origUpper.split(/\s+/).filter(w => w.length > 3 && !SCORE_STOP.has(w.toLowerCase()));
+  const placeTokens = allTokens.filter(w => !TRIBAL_NAMES.has(w.toLowerCase()));
+  const tribalTokens = allTokens.filter(w => TRIBAL_NAMES.has(w.toLowerCase()));
+
+  const matchedPlace = placeTokens.slice(0, 2).some(tok => pwsName.includes(tok));
+  if (matchedPlace) {
+    score += 30;
+  } else if (placeTokens.length === 0 && tribalTokens.some(tok => pwsName.includes(tok))) {
+    // No distinct place token exists at all — tribal name is the only identifier available.
+    score += 15;
+  } else if (placeTokens.length > 0 && tribalTokens.some(tok => pwsName.includes(tok))) {
+    // Matched ONLY on the tribal/nation name while a real place token exists and is absent —
+    // this is the "wrong city, right tribe" trap. Penalize instead of rewarding.
+    score -= 25;
   }
 
   // Active system +20
-  if (String(record.PWS_ACTIVITY_CODE || "").toUpperCase() === "A") score += 20;
+  if (String(record.PWS_ACTIVITY_CODE || record.pws_activity_code || "").toUpperCase() === "A") score += 20;
 
   // Community water system +10
-  if (String(record.PWS_TYPE_CODE || "").toUpperCase() === "CWS") score += 10;
+  if (String(record.PWS_TYPE_CODE || record.pws_type_code || "").toUpperCase() === "CWS") score += 10;
 
   return score;
 }
@@ -1650,7 +1674,7 @@ async function lookupPWSIDFromEPA(
     .map(([pwsid, { record, score }]) => ({
       pwsid,
       name: String(record.PWS_NAME || record.pws_name || "").trim(),
-      status: String(record.PWS_ACTIVITY_CODE || "").toUpperCase() === "A" ? "Active" : "Inactive",
+      status: String(record.PWS_ACTIVITY_CODE || record.pws_activity_code || "").toUpperCase() === "A" ? "Active" : "Inactive",
       pws_type: String(record.PWS_TYPE_CODE || record.pws_type_code || "CWS").toUpperCase(),
       county: String(record.COUNTY_SERVED || record.county_served || "").split(",")[0].trim() || resolvedCounty,
       score,
