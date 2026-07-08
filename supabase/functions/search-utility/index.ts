@@ -2625,13 +2625,24 @@ async function handleArcGISPhase(body: any): Promise<object> {
     }),
   )).filter((c): c is ArcGISLayerCandidate => c !== null);
 
-  // Merge tier 1, tier 2, tier 3, and scored tier 4 candidates
-  const allScored: ArcGISLayerCandidate[] = [
+  // Merge tier 1, tier 2, tier 3, and scored tier 4 candidates — dedupe by serviceUrl, since
+  // tiers can independently discover the identical underlying resource (e.g. Tier 3 has a
+  // built-in safety-net probe of the same EPA Water_System_Boundaries layer Tier 1 already
+  // checks, originally only relevant when Tier 1 was skipped). Keep the highest-scoring copy.
+  const mergedCandidates: ArcGISLayerCandidate[] = [
     ...(tier1Result ? [tier1Result] : []),
     ...(tier2Result ? [tier2Result] : []),
     ...(tier3Result ? [tier3Result] : []),
     ...scoredTier4,
   ].sort((a, b) => b.score - a.score);
+
+  const seenServiceUrls = new Set<string>();
+  const allScored: ArcGISLayerCandidate[] = [];
+  for (const c of mergedCandidates) {
+    if (seenServiceUrls.has(c.serviceUrl)) continue;
+    seenServiceUrls.add(c.serviceUrl);
+    allScored.push(c);
+  }
 
   const winner = allScored[0] ?? null;
   const topScore = winner?.score ?? 0;
