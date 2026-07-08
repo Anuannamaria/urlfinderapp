@@ -455,6 +455,30 @@ function buildRegulatoryInfo(sys: any): RegulatorInfo {
   };
 }
 
+// Fetch regulatory info directly by a known/confirmed PWSID — used once a system has
+// already been selected (Stage 1), so we don't re-run a fuzzy name search that can land
+// on a different, unrelated PWSID than the one the user actually confirmed.
+async function lookupPWSIDDirect(pwsid: string): Promise<RegulatorInfo> {
+  try {
+    const resp = await fetch(`https://data.epa.gov/efservice/WATER_SYSTEM/PWSID/${encodeURIComponent(pwsid)}/JSON`, {
+      signal: AbortSignal.timeout(10000),
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; WaterUtilitySearch/1.0)" },
+    });
+    if (!resp.ok) return { found: false };
+    const data = await resp.json();
+    if (!Array.isArray(data) || data.length === 0) return { found: false };
+
+    const info = buildRegulatoryInfo(data[0]);
+    if (info.pwsid) {
+      const boundary = await queryEPABoundary(info.pwsid);
+      Object.assign(info, boundary, { sector_id: info.pwsid, sector_id_label: "PWSID" });
+    }
+    return info;
+  } catch {
+    return { found: false };
+  }
+}
+
 // ─── Build authoritative results ─────────────────────────────────────────────
 
 function buildAuthoritativeResults(info: RegulatorInfo): SearchResult[] {
@@ -2530,7 +2554,7 @@ async function handleArcGISPhase(body: any): Promise<object> {
   // Very Low boundary likelihood → skip all tiers, return Outcome 3 immediately
   if (boundary_likelihood === "Very Low") {
     const regInfo = confirmed_pwsid
-      ? await lookupPWSID(agency, state, utility_type)
+      ? await lookupPWSIDDirect(confirmed_pwsid)
       : { found: false } as RegulatorInfo;
     return {
       phase: "arcgis",
@@ -2551,14 +2575,18 @@ async function handleArcGISPhase(body: any): Promise<object> {
     };
   }
 
-  // EPA regulatory lookup runs in parallel with tier probes
-  const regInfoPromise = lookupPWSID(agency, state, utility_type).then(async (info) => {
-    if (info.found && info.pwsid) {
-      const b = await queryEPABoundary(info.pwsid);
-      return { ...info, ...b };
-    }
-    return info;
-  });
+  // EPA regulatory lookup runs in parallel with tier probes. When a PWSID has already
+  // been confirmed (Stage 1 selection), look it up directly instead of re-running a fuzzy
+  // name search that can land on a different, unrelated system than the one confirmed.
+  const regInfoPromise = confirmed_pwsid
+    ? lookupPWSIDDirect(confirmed_pwsid)
+    : lookupPWSID(agency, state, utility_type).then(async (info) => {
+        if (info.found && info.pwsid) {
+          const b = await queryEPABoundary(info.pwsid);
+          return { ...info, ...b };
+        }
+        return info;
+      });
 
   // ── Tier 1: EPA direct PWSID query (falls back to name search if no PWSID) ──
   // Note: does NOT short-circuit — even when Tier 1 finds a genuine authoritative match,
