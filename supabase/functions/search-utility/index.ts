@@ -1541,25 +1541,21 @@ function scoreSDWISRecord(record: any, standardizedName: string, originalAgency:
   const intersection = new Set([...refWords].filter(w => pwsWords.has(w)));
   if (union.size > 0) score += Math.round((intersection.size / union.size) * 40);
 
-  // Place-name token bonus +30: first significant PLACE token (excludes tribal/nation names,
-  // which identify a governing body, not a specific system) from originalAgency in SDWIS name.
-  // This differentiates e.g. "SASAKWA RWD" from "SEMINOLE" when agency is
-  // "Sasakwa Water District of The Seminole Nation" — without excluding "SEMINOLE" here, a
-  // same-state system that merely shares the tribe's name would wrongly earn the same bonus.
+  // Name token bonus: a match on the tribal/nation name (+35) outranks a match on a
+  // generic place token (+30) — confirmed policy: when an agency name identifies a
+  // tribal/nation affiliation (e.g. "...of The Seminole Nation of Oklahoma"), the EPA
+  // system registered under that nation's name is preferred over a same-state system
+  // that merely shares a place-name token (e.g. "Sasakwa").
   const allTokens = origUpper.split(/\s+/).filter(w => w.length > 3 && !SCORE_STOP.has(w.toLowerCase()));
   const placeTokens = allTokens.filter(w => !TRIBAL_NAMES.has(w.toLowerCase()));
   const tribalTokens = allTokens.filter(w => TRIBAL_NAMES.has(w.toLowerCase()));
 
+  const matchedTribal = tribalTokens.some(tok => pwsName.includes(tok));
   const matchedPlace = placeTokens.slice(0, 2).some(tok => pwsName.includes(tok));
-  if (matchedPlace) {
+  if (matchedTribal) {
+    score += 35;
+  } else if (matchedPlace) {
     score += 30;
-  } else if (placeTokens.length === 0 && tribalTokens.some(tok => pwsName.includes(tok))) {
-    // No distinct place token exists at all — tribal name is the only identifier available.
-    score += 15;
-  } else if (placeTokens.length > 0 && tribalTokens.some(tok => pwsName.includes(tok))) {
-    // Matched ONLY on the tribal/nation name while a real place token exists and is absent —
-    // this is the "wrong city, right tribe" trap. Penalize instead of rewarding.
-    score -= 25;
   }
 
   // Active system +20
@@ -1607,7 +1603,6 @@ async function lookupPWSIDFromEPA(
   standardizedName: string,
   originalAgency: string,
   stateAbbr: string,
-  isTribal: boolean,
   resolvedCounty: string,
 ): Promise<{ candidates: PWSDCandidate[]; confidence: "verified" | "ambiguous" | "not_found"; searchTerms: string[]; _debug: object }> {
   const { primary, top3, tribal } = extractSearchKeywords(standardizedName, originalAgency);
@@ -1629,7 +1624,12 @@ async function lookupPWSIDFromEPA(
     const [efRecords, echoRecords] = await Promise.all([
       // efservice: try primary keyword (Gate 2), fall through to remaining keywords (Gate 3)
       (async () => {
-        const g2keywords = (isTribal && tribal)
+        // Search the tribal keyword whenever one is detected in the agency name — independent
+        // of entity_category, since e.g. "Sasakwa Water District of The Seminole Nation" gets
+        // classified as Rural-Water-Sewer-District (not Tribal-Nation) by classifyEntityType,
+        // but "Seminole" is still a valid, intentionally-prioritized search term (see
+        // scoreSDWISRecord's tribal-name bonus).
+        const g2keywords = tribal
           ? [primary, tribal]
           : [primary];
         const g2results = await Promise.all(g2keywords.map(k => epaEfserviceFetch(stateAbbr, k, "contains")));
@@ -1714,7 +1714,7 @@ async function handleEnrichPhase(body: any): Promise<object> {
   // Phase B — 4-gate EPA waterfall (all water-type utilities regardless of ownership)
   const isTribal = entity_category === "Tribal-Nation";
   const { candidates, confidence, searchTerms, _debug: lookupDebug } = isWaterType
-    ? await lookupPWSIDFromEPA(enrichment.standardized_name, originalAgency, stateAbbr, isTribal, enrichedCounty)
+    ? await lookupPWSIDFromEPA(enrichment.standardized_name, originalAgency, stateAbbr, enrichedCounty)
     : { candidates: [] as PWSDCandidate[], confidence: "not_found" as const, searchTerms: [originalAgency], _debug: {} };
 
   const finalCandidates = candidates
