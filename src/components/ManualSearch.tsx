@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { SearchEntry, UTILITY_TYPES, PipelineState, ArcGISLayerCandidate, BoundaryFetchResult, EntityCategory, BoundaryLikelihood } from "../types";
 import { enrichAgency, searchArcGIS } from "../utils/searchApi";
+import { GeospatialMapCanvas } from "./GeospatialMapCanvas";
 
 const STATE_NAMES: Record<string, string> = {
   AL:"Alabama",AK:"Alaska",AZ:"Arizona",AR:"Arkansas",CA:"California",
@@ -662,6 +663,13 @@ export default function ManualSearch() {
           >
             <BoundaryOutcomeCard fetch={pipeline.boundaryFetch} copiedUrl={copiedUrl} onCopy={copyUrl} />
           </StageCard>
+        )}
+
+        {pipeline.stage === "done" && pipeline.boundaryFetch?.outcome === 1 &&
+          (pipeline.boundaryFetch.download_url || pipeline.boundaryFetch.boundary_url) && (
+            <GeospatialMapCanvas
+              geojsonUrl={pipeline.boundaryFetch.download_url ?? pipeline.boundaryFetch.boundary_url!}
+            />
         )}
 
         {/* Fallback: old regulatory_info path when no boundaryFetch */}
