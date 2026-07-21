@@ -23,6 +23,9 @@ export type EntityCategory =
   | "Federal-Facility"
   | "Individual-Landowner"
   | "Commercial"
+  | "Fire-Protection-District"
+  | "Irrigation-District"
+  | "Port-District"
   | "Unclassified";
 
 export type BoundaryLikelihood = "High" | "Medium" | "Low" | "Very Low";

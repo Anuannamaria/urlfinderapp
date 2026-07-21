@@ -1118,6 +1118,9 @@ type EntityCategory =
   | "Federal-Facility"
   | "Individual-Landowner"
   | "Commercial"
+  | "Fire-Protection-District"
+  | "Irrigation-District"
+  | "Port-District"
   | "Unclassified";
 
 type BoundaryLikelihood = "High" | "Medium" | "Low" | "Very Low";
@@ -1301,6 +1304,27 @@ function classifyEntityType(agency: string): { entity_category: EntityCategory; 
   if (any(["Rural Water District","Rural Water and Sewer","Rural Water & Sewer","Water District","Solid Waste Management District"]) ||
       /\bRWD\b/.test(agency) || /Water District #\s*\d/i.test(agency)) {
     return { entity_category: "Rural-Water-Sewer-District", boundary_likelihood: "High" };
+  }
+
+  // ── Fire Protection District — frequently mislabeled with a "water" utility
+  // type in source data, but is not itself a drinking-water utility. A minority
+  // do also operate a small water system, so this does NOT skip the PWSID
+  // search — it only fixes classification so boundary source selection
+  // (county fire-district GIS layers) is correctly prioritized.
+  if (any(["Fire Protection District","Fire District","Fire Rescue","Fire & Rescue","Fire and Rescue","Regional Fire Authority","Fire Authority"])) {
+    return { entity_category: "Fire-Protection-District", boundary_likelihood: "Medium" };
+  }
+
+  // ── Irrigation District — delivers agricultural/irrigation water, distinct
+  // from a public drinking-water utility; rarely has an EPA PWSID.
+  if (any(["Irrigation District","Reclamation District","Water Users Association","Ditch Association"])) {
+    return { entity_category: "Irrigation-District", boundary_likelihood: "Medium" };
+  }
+
+  // ── Port District — marine/economic-development special district, not a
+  // utility, but usually has a real GIS-mapped boundary.
+  if (any(["Port of","Port District"])) {
+    return { entity_category: "Port-District", boundary_likelihood: "Medium" };
   }
 
   // ── Medium-High ───────────────────────────────────────────────────────────
@@ -2237,12 +2261,21 @@ function isPublisherRejected(candidate: { owner: string; serviceUrl: string }): 
 async function tier4_ArcGISWithBbox(
   corePlaceTokens: string[], standardizedName: string,
   stateAbbr: string, state: string, utilityType: string, pwsid?: string,
+  entityCategory?: string,
 ): Promise<Array<{ title: string; owner: string; serviceUrl: string; snippet: string }>> {
   const bbox = STATE_BBOXES[stateAbbr];
   if (!bbox) return [];
 
+  // Entity category takes priority over the (often mislabeled) utility_type field —
+  // e.g. a Fire Protection District is frequently tagged utility_type="water" in source
+  // data even though its real boundary source is a county fire-district GIS layer, not
+  // a water-service-area one.
   const ut = utilityType.toLowerCase();
-  const typeTerms = ut === "water" ? `"service area" OR "water district" OR "boundary"`
+  const typeTerms =
+    entityCategory === "Fire-Protection-District" ? `"fire district" OR "fire protection" OR "response area" OR "boundary"`
+    : entityCategory === "Irrigation-District" ? `"irrigation district" OR "reclamation district" OR "boundary"`
+    : entityCategory === "Port-District" ? `"port district" OR "port commissioner" OR "boundary"`
+    : ut === "water" ? `"service area" OR "water district" OR "boundary"`
     : ut === "sewer" || ut === "wastewater" ? `"sewer district" OR "wastewater" OR "service area"`
     : ut === "electric" ? `"service territory" OR "electric cooperative" OR "boundary"`
     : ut === "gas" ? `"gas service area" OR "gas district" OR "boundary"`
@@ -2583,11 +2616,23 @@ async function handleArcGISPhase(body: any): Promise<object> {
     };
   }
 
+  // Entity categories that structurally never have an EPA PWSID (not drinking-water
+  // utilities). For these, a missing confirmed_pwsid doesn't mean "try a fuzzy name
+  // fallback against the EPA water registry" (Tier 1's nameFallback path, or regInfo's
+  // legacy lookupPWSID call) — that produces false positives, e.g. "Fire Protection
+  // District 11" fuzzy-matching an unrelated "Irrigation District" purely because both
+  // contain the county/place name. It means "skip the EPA water search and rely on
+  // Tier 4's entity-specific ArcGIS search instead."
+  const NON_PWSID_ENTITY_CATEGORIES = new Set(["Fire-Protection-District", "Irrigation-District", "Port-District"]);
+  const skipEPAWaterSearch = !confirmed_pwsid && NON_PWSID_ENTITY_CATEGORIES.has(entity_category);
+
   // EPA regulatory lookup runs in parallel with tier probes. When a PWSID has already
   // been confirmed (Stage 1 selection), look it up directly instead of re-running a fuzzy
   // name search that can land on a different, unrelated system than the one confirmed.
   const regInfoPromise = confirmed_pwsid
     ? lookupPWSIDDirect(confirmed_pwsid)
+    : skipEPAWaterSearch
+    ? Promise.resolve({ found: false } as RegulatorInfo)
     : lookupPWSID(agency, state, utility_type).then(async (info) => {
         if (info.found && info.pwsid) {
           const b = await queryEPABoundary(info.pwsid);
@@ -2601,7 +2646,9 @@ async function handleArcGISPhase(body: any): Promise<object> {
   // Tiers 2-4 still run so users see the full candidate set (Tier 1's allowlist-override
   // score naturally still wins the ranking, but lower-confidence alternatives remain visible
   // instead of being hidden).
-  const tier1Result = await tier1_EPADirectQuery(confirmed_pwsid ?? "", utility_type, searchName);
+  const tier1Result = skipEPAWaterSearch
+    ? null
+    : await tier1_EPADirectQuery(confirmed_pwsid ?? "", utility_type, searchName);
 
   // ── Tier 2: Official website check ────────────────────────────────────────
   const tier2Result = await tier2_OfficialWebsite(searchName, state, stateAbbr, utility_type);
@@ -2609,10 +2656,15 @@ async function handleArcGISPhase(body: any): Promise<object> {
   // ── Tier 3: State portals ─────────────────────────────────────────────────
   const tier3Result = await tier3_StatePortals(corePlaceTokens, searchName, stateAbbr, utility_type, confirmed_pwsid);
 
-  // ── Tier 4: ArcGIS with mandatory bbox (only when PWSID confirmed) ─────────
-  // Skipped when PWSID = NOT_FOUND — organic ArcGIS search returns globally random results
-  const tier4Raw = confirmed_pwsid
-    ? await tier4_ArcGISWithBbox(corePlaceTokens, searchName, stateAbbr, state, utility_type, confirmed_pwsid)
+  // ── Tier 4: ArcGIS with mandatory bbox ──────────────────────────────────────
+  // Normally requires a confirmed PWSID — without one, an organic water-service search
+  // returns globally random results. Exception: Fire/Irrigation/Port districts structurally
+  // never have a PWSID (they're not EPA-regulated drinking water systems), so a missing
+  // PWSID there doesn't mean "unresolved" — it means "search anyway" via their
+  // entity-specific type terms (see tier4_ArcGISWithBbox), which are targeted enough
+  // (place tokens + bbox + district-type terms) to avoid the random-result problem.
+  const tier4Raw = (confirmed_pwsid || NON_PWSID_ENTITY_CATEGORIES.has(entity_category))
+    ? await tier4_ArcGISWithBbox(corePlaceTokens, searchName, stateAbbr, state, utility_type, confirmed_pwsid, entity_category)
     : [];
 
   // Gate filtering + scoring of Tier 4 candidates

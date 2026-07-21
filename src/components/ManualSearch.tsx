@@ -756,6 +756,9 @@ function EntityTag({ category }: { category: EntityCategory }) {
     "Federal-Facility": "bg-gray-100 text-gray-600 border-gray-200",
     "Individual-Landowner": "bg-red-100 text-red-600 border-red-200",
     "Commercial": "bg-pink-100 text-pink-700 border-pink-200",
+    "Fire-Protection-District": "bg-amber-100 text-amber-700 border-amber-200",
+    "Irrigation-District": "bg-lime-100 text-lime-700 border-lime-200",
+    "Port-District": "bg-cyan-100 text-cyan-700 border-cyan-200",
     "Unclassified": "bg-slate-100 text-slate-500 border-slate-200",
   };
   return (
