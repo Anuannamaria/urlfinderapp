@@ -1574,8 +1574,18 @@ function scoreSDWISRecord(record: any, standardizedName: string, originalAgency:
   const stdTokens = stdUpper.split(/\s+/).filter(w => w.length > 2);
   const origTokens = origUpper.split(/\s+/).filter(w => w.length > 2);
   const refUpper = origTokens.length > stdTokens.length ? origUpper : stdUpper;
-  const refWords = new Set(refUpper.split(/\s+/).filter(w => w.length > 2));
-  const pwsWords = new Set(pwsName.split(/\s+/).filter(w => w.length > 2));
+  // Exclude generic corporate-suffix words (WATER, DISTRICT, SYSTEM, ASSOCIATION, ...) from
+  // the overlap calculation — otherwise a candidate that merely shares a suffix word with the
+  // agency's legal name (e.g. both end in "DISTRICT") gets rewarded as if that were meaningful
+  // similarity, even when the actual identifying place word differs entirely. Verified case:
+  // "Valley Water District" (Puyallup) vs EPA's "VALLEY WATER SYSTEM" (correct match, but only
+  // shares "VALLEY") was outscored by the unrelated "HOME VALLEY WATER DISTRICT" (Stevenson,
+  // WA) purely because both agency name and candidate contain "DISTRICT".
+  const filterMeaningful = (s: string) => s.split(/\s+/).filter(w => w.length > 2 && !SCORE_STOP.has(w.toLowerCase()));
+  const refWordsList = filterMeaningful(refUpper);
+  const pwsWordsList = filterMeaningful(pwsName);
+  const refWords = new Set(refWordsList.length > 0 ? refWordsList : refUpper.split(/\s+/).filter(w => w.length > 2));
+  const pwsWords = new Set(pwsWordsList.length > 0 ? pwsWordsList : pwsName.split(/\s+/).filter(w => w.length > 2));
 
   // Word coverage fraction +50
   if (refWords.size > 0) {
