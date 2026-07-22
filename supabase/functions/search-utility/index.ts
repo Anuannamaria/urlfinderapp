@@ -2463,7 +2463,14 @@ function scoreArcGISCandidate(
   if (idFieldFound) { score += 100; reasons.push("PWSID field in schema (+100)"); }
 
   // Publisher: confirmed US federal or state government org (+60)
-  const isFederalGov = /\.gov\/|epa\.gov|usgs\.gov|census\.gov|services\.arcgis\.com/i.test(candidate.serviceUrl + " " + ownerLower);
+  // NOTE: "services.arcgis.com" is Esri's generic multi-tenant hosting domain — anyone with an
+  // ArcGIS Online account (universities, hobbyists, private companies) publishes there, not
+  // just government agencies. It must NOT be treated as proof of government ownership here;
+  // it's already counted separately below as a much smaller "trusted hosting platform" signal.
+  // Verified case: "USAIndianReserv" (published by a university GIS lab, nothing to do with a
+  // specific WA water district) was scoring 90/245 — high enough to look like a real candidate —
+  // almost entirely because it happened to be hosted on services.arcgis.com.
+  const isFederalGov = /\.gov\/|epa\.gov|usgs\.gov|census\.gov/i.test(candidate.serviceUrl + " " + ownerLower);
   if (isFederalGov) { score += 60; reasons.push("confirmed US federal/state government org (+60)"); }
 
   // Layer title contains core_place_token: exact word match (+50), partial match (+20)
