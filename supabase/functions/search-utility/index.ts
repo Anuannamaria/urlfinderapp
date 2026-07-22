@@ -2148,6 +2148,20 @@ async function tier3_StatePortals(
 
   // ── Water: state open data hubs + EPA SDWIS ──────────────────────────────
   if (ut === "water" || ut === "sewer" || ut === "wastewater") {
+    // Washington-specific: WA DOH's own "Drinking Water Service Areas" layer (geo.wa.gov,
+    // item b09475f47a5a46ca90fe6a168fb22e6d) uses a different ID format than EPA's federal
+    // PWSID — e.g. EPA "WA5301250" is WA DOH WS_ID "01250" (state/primacy prefix "WA53"
+    // stripped). Without this transform, this genuine WA-specific source silently never
+    // gets reached because everything else in this file queries by the full EPA PWSID.
+    // Probed with priority 1 (tried before the generic EPA duplicate below) so it's actually
+    // used when it has real data, surfacing it as a distinct candidate from Tier 1's EPA layer.
+    if (stateAbbr === "WA" && pwsid) {
+      const waWsId = pwsid.replace(/^WA53/i, "");
+      candidates.push({
+        url: `https://services8.arcgis.com/rGGrs6HCnw87OFOT/arcgis/rest/services/Drinking_Water_Service_Areas/FeatureServer/0/query?where=WS_ID%3D'${encodeURIComponent(waWsId)}'&outFields=*&f=geojson`,
+        label: "WA DOH Drinking Water Service Areas", priority: 1,
+      });
+    }
     // Oklahoma-specific
     if (stateAbbr === "OK") {
       candidates.push({
